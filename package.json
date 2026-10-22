@@ -1,0 +1,48 @@
+{
+  "name": "leadgram",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Website forms → Telegram. A tiny self-hosted endpoint with validation, spam protection and a drop-in widget.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "npm run build:widget && node --env-file-if-exists=.env --watch src/server.ts",
+    "start": "node --env-file-if-exists=.env dist/server.js",
+    "build": "tsc -p tsconfig.build.json && npm run build:widget",
+    "build:widget": "esbuild widget/leadgram.ts --bundle --minify --format=iife --global-name=Leadgram --target=es2019 --outfile=dist/widget/leadgram.js",
+    "chat-id": "node --env-file-if-exists=.env src/chat-id.ts",
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "telegram",
+    "telegram-bot",
+    "forms",
+    "leads",
+    "contact-form",
+    "landing-page",
+    "hono",
+    "spam-protection"
+  ],
+  "author": "Svyatoslav Maliuga (https://github.com/Shelbythx)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Shelbythx/leadgram.git"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.4",
+    "hono": "^4.13.13",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "esbuild": "^0.28.2",
+    "happy-dom": "^20.14.6",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}
