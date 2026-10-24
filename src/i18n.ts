@@ -1,6 +1,6 @@
 export type Locale = 'uk' | 'en';
 
-export interface Messages {
+export interface LocaleTexts {
   newLead: string;
   name: string;
   phone: string;
@@ -19,15 +19,15 @@ export interface Messages {
     rateLimited: string;
     deliveryFailed: string;
   };
-  result: {
+  resultPage: {
     thanksTitle: string;
     thanksBody: string;
     errorTitle: string;
-    back: string;
+    backToSite: string;
   };
 }
 
-export const messages: Record<Locale, Messages> = {
+export const TEXTS: Record<Locale, LocaleTexts> = {
   uk: {
     newLead: 'Нова заявка',
     name: "Ім'я",
@@ -47,11 +47,11 @@ export const messages: Record<Locale, Messages> = {
       rateLimited: 'Забагато заявок поспіль. Спробуйте ще раз за кілька хвилин.',
       deliveryFailed: 'Не вдалося надіслати заявку. Спробуйте ще раз або зателефонуйте нам.',
     },
-    result: {
+    resultPage: {
       thanksTitle: 'Дякуємо!',
       thanksBody: 'Заявку отримано. Ми зв’яжемося з вами найближчим часом.',
       errorTitle: 'Заявку не надіслано',
-      back: '← Повернутися на сайт',
+      backToSite: '← Повернутися на сайт',
     },
   },
   en: {
@@ -73,11 +73,11 @@ export const messages: Record<Locale, Messages> = {
       rateLimited: 'Too many requests in a row. Please try again in a few minutes.',
       deliveryFailed: 'We could not send your request. Please try again or give us a call.',
     },
-    result: {
+    resultPage: {
       thanksTitle: 'Thank you!',
       thanksBody: 'We have received your request and will get back to you soon.',
       errorTitle: 'Request not sent',
-      back: '← Back to the website',
+      backToSite: '← Back to the website',
     },
   },
 };

@@ -6,14 +6,13 @@ export interface Logger {
   error(event: string, fields?: LogFields): void;
 }
 
-/**
- * One JSON object per line, ready for Docker / Render / Railway log viewers.
- * Never pass personal data (names, phones, message text) into it.
- */
-export function createLogger(write: (line: string) => void = (line) => console.log(line)): Logger {
-  const log = (level: string) => (event: string, fields: LogFields = {}) =>
+type LogLevel = keyof Logger;
+
+export function createLogger(write: (line: string) => void = console.log): Logger {
+  const logAt = (level: LogLevel) => (event: string, fields: LogFields = {}) =>
     write(JSON.stringify({ time: new Date().toISOString(), level, event, ...fields }));
-  return { info: log('info'), warn: log('warn'), error: log('error') };
+
+  return { info: logAt('info'), warn: logAt('warn'), error: logAt('error') };
 }
 
 export const silentLogger: Logger = { info() {}, warn() {}, error() {} };

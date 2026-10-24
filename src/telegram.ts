@@ -1,39 +1,17 @@
+import { errorMessage } from './errors.ts';
+
 export interface ChatTarget {
   chatId: string;
-  /** Topic id in a forum supergroup, so leads land in a specific thread. */
-  threadId?: number | undefined;
+  topicId?: number | undefined;
 }
 
 export interface DeliveryResult {
   delivered: number;
-  /** Error descriptions for chats that did not receive the message. */
   failed: string[];
 }
 
-/** Anything that can deliver a formatted lead. Tests pass a fake one. */
 export interface Notifier {
   send(html: string): Promise<DeliveryResult>;
-}
-
-export class TelegramError extends Error {
-  override name = 'TelegramError';
-}
-
-interface ApiResponse<T> {
-  ok: boolean;
-  result?: T;
-  description?: string;
-  parameters?: { retry_after?: number };
-}
-
-export interface TelegramOptions {
-  token: string;
-  chats: ChatTarget[];
-  fetch?: typeof fetch;
-  apiBase?: string;
-  /** Injected in tests to skip real waiting. */
-  sleep?: (ms: number) => Promise<void>;
-  maxAttempts?: number;
 }
 
 export interface TelegramChat {
@@ -44,83 +22,141 @@ export interface TelegramChat {
   first_name?: string;
 }
 
-const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+export interface TelegramOptions {
+  token: string;
+  chats: ChatTarget[];
+  apiUrl?: string | undefined;
+  fetch?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
+  maxAttempts?: number;
+}
+
+export class TelegramError extends Error {
+  override name = 'TelegramError';
+}
+
+interface ApiReply<T> {
+  ok: boolean;
+  result?: T;
+  description?: string;
+  parameters?: { retry_after?: number };
+}
+
+interface ApiResponse<T> {
+  status: number;
+  reply: ApiReply<T>;
+}
+
+type SendAttempt = { sent: true } | { sent: false; retryable: boolean; reason: string; retryAfterMs?: number | undefined };
+
+interface Update {
+  message?: { chat: TelegramChat };
+  channel_post?: { chat: TelegramChat };
+  my_chat_member?: { chat: TelegramChat };
+}
+
+const DEFAULT_API_URL = 'https://api.telegram.org';
+const DEFAULT_MAX_ATTEMPTS = 3;
+const REQUEST_TIMEOUT_MS = 10_000;
+const RETRY_BACKOFF_MS = 500;
+const MAX_FLOOD_WAIT_SECONDS = 10;
+const UPDATES_LIMIT = 100;
+const HTTP_TOO_MANY_REQUESTS = 429;
+const HTTP_SERVER_ERROR = 500;
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export function createTelegram(options: TelegramOptions) {
-  const fetchImpl = options.fetch ?? globalThis.fetch;
-  const apiBase = options.apiBase ?? 'https://api.telegram.org';
-  const sleep = options.sleep ?? wait;
-  const maxAttempts = options.maxAttempts ?? 3;
+  const {
+    token,
+    chats,
+    apiUrl = DEFAULT_API_URL,
+    fetch: fetchImpl = globalThis.fetch,
+    sleep = delay,
+    maxAttempts = DEFAULT_MAX_ATTEMPTS,
+  } = options;
 
-  async function call<T>(method: string, payload: object): Promise<{ status: number; body: ApiResponse<T> }> {
-    const response = await fetchImpl(`${apiBase}/bot${options.token}/${method}`, {
+  async function call<T>(method: string, payload: object = {}): Promise<ApiResponse<T>> {
+    const response = await fetchImpl(`${apiUrl}/bot${token}/${method}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    const body = (await response.json().catch(() => ({ ok: false, description: `HTTP ${response.status}` }))) as ApiResponse<T>;
-    return { status: response.status, body };
+    const reply = await response.json().catch(() => ({ ok: false, description: `HTTP ${response.status}` }));
+    return { status: response.status, reply: reply as ApiReply<T> };
   }
 
-  async function sendTo(chat: ChatTarget, text: string): Promise<void> {
-    const payload = {
-      chat_id: chat.chatId,
-      ...(chat.threadId ? { message_thread_id: chat.threadId } : {}),
-      text,
-      parse_mode: 'HTML',
-      link_preview_options: { is_disabled: true },
-    };
+  async function callForResult<T>(method: string, payload?: object): Promise<T> {
+    const { reply } = await call<T>(method, payload);
+    if (!reply.ok || reply.result === undefined) throw new TelegramError(reply.description ?? `${method} failed`);
+    return reply.result;
+  }
 
+  async function attemptSend(payload: object): Promise<SendAttempt> {
+    try {
+      const { status, reply } = await call('sendMessage', payload);
+      if (reply.ok) return { sent: true };
+      return { sent: false, retryable: isRetryableStatus(status), reason: reply.description ?? `HTTP ${status}`, retryAfterMs: floodWaitMs(reply) };
+    } catch (error) {
+      return { sent: false, retryable: true, reason: errorMessage(error) };
+    }
+  }
+
+  async function sendToChat(chat: ChatTarget, html: string): Promise<void> {
+    const payload = messagePayload(chat, html);
     for (let attempt = 1; ; attempt++) {
-      let result: Awaited<ReturnType<typeof call>>;
-      try {
-        result = await call('sendMessage', payload);
-      } catch (error) {
-        if (attempt >= maxAttempts) throw new TelegramError(`chat ${chat.chatId}: ${(error as Error).message}`);
-        await sleep(500 * attempt);
-        continue;
-      }
-
-      if (result.body.ok) return;
-
-      // 429 = flood control (Telegram says how long to wait), 5xx = their side.
-      const retryable = result.status === 429 || result.status >= 500;
-      if (!retryable || attempt >= maxAttempts) {
-        throw new TelegramError(`chat ${chat.chatId}: ${result.body.description ?? `HTTP ${result.status}`}`);
-      }
-      const retryAfter = result.body.parameters?.retry_after;
-      await sleep(retryAfter ? Math.min(retryAfter, 10) * 1000 : 500 * attempt);
+      const result = await attemptSend(payload);
+      if (result.sent) return;
+      if (!result.retryable || attempt >= maxAttempts) throw new TelegramError(`chat ${chat.chatId}: ${result.reason}`);
+      await sleep(result.retryAfterMs ?? RETRY_BACKOFF_MS * attempt);
     }
   }
 
   return {
-    /** Sends to every chat. Succeeds if at least one chat received the message. */
     async send(html: string): Promise<DeliveryResult> {
-      const results = await Promise.allSettled(options.chats.map((chat) => sendTo(chat, html)));
-      const failed = results.flatMap((r) => (r.status === 'rejected' ? [(r.reason as Error).message] : []));
+      const results = await Promise.allSettled(chats.map((chat) => sendToChat(chat, html)));
+      const failed = results.filter((result) => result.status === 'rejected').map((result) => errorMessage(result.reason));
       if (failed.length === results.length) throw new TelegramError(failed.join('; '));
       return { delivered: results.length - failed.length, failed };
     },
 
-    /** Checks the token and returns the bot's @username. */
-    async getMe(): Promise<string> {
-      const { body } = await call<{ username: string }>('getMe', {});
-      if (!body.ok || !body.result) throw new TelegramError(body.description ?? 'getMe failed');
-      return body.result.username;
+    async botUsername(): Promise<string> {
+      const bot = await callForResult<{ username: string }>('getMe');
+      return bot.username;
     },
 
-    /** Chats that have recently messaged the bot — used to find chat ids. */
     async recentChats(): Promise<TelegramChat[]> {
-      type Update = { message?: { chat: TelegramChat }; channel_post?: { chat: TelegramChat }; my_chat_member?: { chat: TelegramChat } };
-      const { body } = await call<Update[]>('getUpdates', { limit: 100 });
-      if (!body.ok || !body.result) throw new TelegramError(body.description ?? 'getUpdates failed');
-      const chats = new Map<number, TelegramChat>();
-      for (const update of body.result) {
-        const chat = update.message?.chat ?? update.channel_post?.chat ?? update.my_chat_member?.chat;
-        if (chat) chats.set(chat.id, chat);
-      }
-      return [...chats.values()];
+      const updates = await callForResult<Update[]>('getUpdates', { limit: UPDATES_LIMIT });
+      return uniqueChats(updates);
     },
   };
+}
+
+function messagePayload(chat: ChatTarget, html: string): object {
+  return {
+    chat_id: chat.chatId,
+    ...(chat.topicId ? { message_thread_id: chat.topicId } : {}),
+    text: html,
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+  };
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === HTTP_TOO_MANY_REQUESTS || status >= HTTP_SERVER_ERROR;
+}
+
+function floodWaitMs(reply: ApiReply<unknown>): number | undefined {
+  const seconds = reply.parameters?.retry_after;
+  return seconds ? Math.min(seconds, MAX_FLOOD_WAIT_SECONDS) * 1000 : undefined;
+}
+
+function uniqueChats(updates: Update[]): TelegramChat[] {
+  const chatsById = new Map<number, TelegramChat>();
+  for (const update of updates) {
+    const chat = update.message?.chat ?? update.channel_post?.chat ?? update.my_chat_member?.chat;
+    if (chat) chatsById.set(chat.id, chat);
+  }
+  return [...chatsById.values()];
 }

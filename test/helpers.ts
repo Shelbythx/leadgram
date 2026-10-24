@@ -20,7 +20,6 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
   };
 }
 
-/** Records messages instead of sending them; can be told to fail. */
 export class FakeNotifier implements Notifier {
   sent: string[] = [];
   failWith: Error | undefined;
