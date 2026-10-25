@@ -18,6 +18,7 @@
 
 ▫️ Guests: 20–50
 ▫️ Extras: Кава-бар, Випічка
+📎 Файли: 2
 
 🌐 Сторінка: cafe.example/catering
 📊 UTM: source=instagram · campaign=autumn
@@ -35,9 +36,10 @@ Small businesses answer leads from their phone, not from an inbox. Email notific
 - **Spam protection without CAPTCHA**: a hidden honeypot field, a minimum fill time, a link limit, and per-IP rate limiting. Bots get a fake "success" so they learn nothing
 - **No lost leads**: if every destination is down, the visitor sees an error and can retry; double submits are deduplicated
 - **Several recipients**: send to the owner, a managers' group, or a specific forum topic
+- **Attachments**: photos and PDFs arrive in Telegram right under the lead. File types are checked by content, not by name, and nothing is written to disk
 - **Webhook**: also forward every lead as signed JSON to Zapier, Make, n8n, your CRM or a Google Sheet
 - **Private by default**: lead data is never stored or logged. Logs are JSON lines with events only
-- **Small and tested**: Hono + Zod, 131 tests, strict TypeScript, Docker image
+- **Small and tested**: Hono + Zod, 170 tests, strict TypeScript, Docker image
 
 ## Quick start
 
@@ -102,6 +104,26 @@ Then add `https://your-site.com` to `ALLOWED_ORIGINS`.
 | anything else | Shown in the message as "Field name: value" (up to 10 fields). Checkbox groups are joined: `Coffee, Tea` |
 | `_form` | Form name shown in the message title, useful when one site has several forms |
 | `_page`, `_t`, `_gotcha` | Added by the widget: source page, render time, honeypot |
+| `<input type="file">` | Photos or PDFs, when attachments are on ([details](#attachments)) |
+
+### Attachments
+
+Set `MAX_FILES` (for example `3`) and add a file input. Attachments are off by default, so a form never accepts uploads you did not plan for.
+
+```html
+<form data-leadgram action="https://forms.example.com/lead" method="post" enctype="multipart/form-data">
+  …
+  <label for="photos">Photos of the problem</label>
+  <input id="photos" name="photos" type="file" accept="image/*,application/pdf" multiple>
+  …
+</form>
+```
+
+- The widget switches to `multipart/form-data` by itself when a file is selected; `enctype` is only needed for the no-JavaScript fallback.
+- Accepted: JPEG, PNG and WebP (shown as photos), HEIC and PDF (sent as files). The type is detected from the first bytes of the file, so a renamed `.exe` is rejected.
+- Files arrive as a reply to the lead message, grouped into albums of up to 10.
+- Limits: `MAX_FILES` per lead and `MAX_FILE_MB` per file. A file that breaks a rule is reported on its own field, like any other validation error.
+- Uploads are held in memory only while the request is processed. The webhook receives file names, types and sizes, not the content.
 
 ### Widget options
 
@@ -133,14 +155,14 @@ async function submit(data: { name: string; phone: string }) {
 
 ## API
 
-`POST /lead` accepts `application/json`, `application/x-www-form-urlencoded` or `multipart/form-data` (max 16 KB).
+`POST /lead` accepts `application/json`, `application/x-www-form-urlencoded` or `multipart/form-data`. Bodies are limited to 16 KB; with attachments on, multipart requests may be as large as `MAX_FILES × MAX_FILE_MB`.
 
 | Status | Body (JSON clients) | When |
 | --- | --- | --- |
 | `200` | `{ "ok": true }` | Delivered, or silently dropped as spam / duplicate |
 | `400` | `{ "ok": false, "error": "bad_request" }` | Unreadable body or unsupported content type |
 | `403` | `{ "ok": false, "error": "forbidden_origin" }` | `Origin` not in `ALLOWED_ORIGINS` |
-| `413` | `{ "ok": false, "error": "payload_too_large" }` | Body over 16 KB |
+| `413` | `{ "ok": false, "error": "payload_too_large" }` | Body over the limit |
 | `422` | `{ "ok": false, "error": "validation", "message", "fields" }` | Invalid input; `fields` maps field → message |
 | `429` | `{ "ok": false, "error": "rate_limited" }` + `Retry-After` | Too many leads from one IP |
 | `502` | `{ "ok": false, "error": "delivery_failed" }` | No destination accepted the lead |
@@ -166,6 +188,8 @@ All settings are environment variables; see [`.env.example`](.env.example). Inva
 | `MAX_LINKS` | `2` | More links in text fields is treated as spam |
 | `SUCCESS_REDIRECT` | | Thank-you page for no-JS submissions |
 | `TRUST_PROXY` | `false` | Read the visitor IP from `X-Forwarded-For` (enable behind a proxy) |
+| `MAX_FILES` | `0` | Files per lead (up to 10); `0` turns attachments off |
+| `MAX_FILE_MB` | `10` | Size limit per file (up to 20) |
 | `WEBHOOK_URL` | | Also POST every lead as JSON to this URL ([details](#webhook)) |
 | `WEBHOOK_SECRET` | | At least 16 characters; signs each request with HMAC-SHA256 |
 | `TELEGRAM_API_URL` | `https://api.telegram.org` | For a self-hosted Bot API server |
@@ -188,7 +212,8 @@ Set `WEBHOOK_URL` and every lead is also sent as JSON to that address, in parall
     "formName": "Кава на захід",
     "page": "https://cafe.example/catering?utm_source=instagram",
     "utm": { "source": "instagram" },
-    "fields": { "guests": "20–50", "extras": "Кава-бар, Випічка" }
+    "fields": { "guests": "20–50", "extras": "Кава-бар, Випічка" },
+    "attachments": [{ "name": "hall.jpg", "mimeType": "image/jpeg", "size": 482113 }]
   }
 }
 ```
@@ -256,8 +281,11 @@ src/
     responder.ts         JSON or HTML responses, error codes → statuses
     origin-policy.ts     allowed origins, trusted referers
     result-page.ts       thank-you / error page for no-JS posts
+    body-limit.ts        16 KB for text, more for uploads
   lead/
     lead.ts              lead schema and parsing
+    attachments.ts       file limits and safe file names
+    file-type.ts         file type detection by content
     phone.ts             phone normalization (+380…)
     message.ts           Telegram HTML message
     fields.ts            service field names shared with the widget
@@ -292,11 +320,6 @@ npm test            # vitest: one file per module, HTTP pipeline, widget in happ
 npm run typecheck
 npm run build       # dist/ + dist/widget/leadgram.js
 ```
-
-## Roadmap
-
-- Optional Cloudflare Turnstile check for high-traffic sites
-- File attachments (photos for repair or design requests)
 
 ## License
 
