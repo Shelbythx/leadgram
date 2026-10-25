@@ -1,21 +1,20 @@
 import type { Context } from 'hono';
 import type { Config } from '../config.ts';
-import { errorMessage } from '../errors.ts';
+import type { Destination } from '../delivery/destination.ts';
+import { createDispatcher } from '../delivery/dispatcher.ts';
 import { TEXTS } from '../i18n.ts';
-import { createLeadSchema, type Lead, parseLead } from '../lead/lead.ts';
-import { renderLeadMessage } from '../lead/message.ts';
+import { createLeadSchema, parseLead } from '../lead/lead.ts';
 import type { Logger } from '../log.ts';
 import { DuplicateGuard, fingerprint } from '../protection/duplicate-guard.ts';
 import { RateLimiter } from '../protection/rate-limiter.ts';
 import { detectSpam } from '../protection/spam-filter.ts';
-import type { Notifier } from '../telegram.ts';
 import type { OriginPolicy } from './origin-policy.ts';
 import { type ClientIpResolver, readFormFields } from './request.ts';
 import type { Responder } from './responder.ts';
 
 export interface LeadRouteDeps {
   config: Config;
-  notifier: Notifier;
+  destinations: readonly Destination[];
   clientIp: ClientIpResolver;
   origins: OriginPolicy;
   respond: Responder;
@@ -25,27 +24,14 @@ export interface LeadRouteDeps {
 
 const DUPLICATE_WINDOW_MS = 60_000;
 
-export function createLeadHandler({ config, notifier, clientIp, origins, respond, log, now }: LeadRouteDeps) {
-  const texts = TEXTS[config.locale];
-  const schema = createLeadSchema(texts);
+export function createLeadHandler({ config, destinations, clientIp, origins, respond, log, now }: LeadRouteDeps) {
+  const schema = createLeadSchema(TEXTS[config.locale]);
+  const dispatch = createDispatcher(destinations, log);
   const rateLimiter = new RateLimiter(config.rateLimit);
   const duplicates = new DuplicateGuard(DUPLICATE_WINDOW_MS);
   const spamRules = { minFillMs: config.minFillMs, maxLinks: config.maxLinks };
 
   const ignoreSilently = (c: Context) => respond.accept(c);
-
-  async function deliver(lead: Lead, origin: string | undefined): Promise<boolean> {
-    const message = renderLeadMessage(lead, { texts, locale: config.locale, timeZone: config.timeZone, receivedAt: new Date(now()) });
-    try {
-      const result = await notifier.send(message);
-      log.info('lead.sent', { origin, form: lead.formName, delivered: result.delivered, failed: result.failed.length });
-      for (const reason of result.failed) log.warn('telegram.partial_failure', { reason });
-      return true;
-    } catch (error) {
-      log.error('lead.delivery_failed', { origin, reason: errorMessage(error) });
-      return false;
-    }
-  }
 
   return async (c: Context) => {
     const origin = c.req.header('origin');
@@ -82,7 +68,7 @@ export function createLeadHandler({ config, notifier, clientIp, origins, respond
     }
 
     duplicates.remember(leadKey, now());
-    if (await deliver(lead, origin)) return respond.accept(c);
+    if (await dispatch(lead, new Date(now()), origin)) return respond.accept(c);
 
     duplicates.forget(leadKey);
     return respond.reject(c, 'delivery_failed');

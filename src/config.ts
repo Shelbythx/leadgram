@@ -16,8 +16,14 @@ export interface Config {
   minFillMs: number;
   maxLinks: number;
   successRedirect?: string | undefined;
+  webhook?: WebhookConfig | undefined;
   trustProxy: boolean;
   demoPage: boolean;
+}
+
+export interface WebhookConfig {
+  url: string;
+  secret?: string | undefined;
 }
 
 export const ANY_ORIGIN = '*';
@@ -27,6 +33,7 @@ const RATE_LIMIT_FORMAT = /^(\d+)\s*\/\s*(\d*)\s*([smh])$/;
 const CHAT_ID_FORMAT = /^-?\d+$|^@\w+$/;
 const BOT_TOKEN_FORMAT = /^\d+:[\w-]{30,}$/;
 const WEB_URL = { protocol: /^https?$/ };
+const MIN_WEBHOOK_SECRET_LENGTH = 16;
 
 export class ConfigError extends Error {
   override name = 'ConfigError';
@@ -76,7 +83,7 @@ function isTimeZone(zone: string): boolean {
   }
 }
 
-const EnvSchema = z.object({
+const EnvVariables = z.object({
   TELEGRAM_BOT_TOKEN: z
     .string({ error: 'is required — create a bot with @BotFather and paste its token' })
     .regex(BOT_TOKEN_FORMAT, { error: 'does not look like a bot token (expected 123456:ABC…)' }),
@@ -110,8 +117,18 @@ const EnvSchema = z.object({
   MIN_FILL_SECONDS: z.coerce.number().min(0).max(60).default(3),
   MAX_LINKS: z.coerce.number().int().min(0).default(2),
   SUCCESS_REDIRECT: z.url(WEB_URL).optional(),
+  WEBHOOK_URL: z.url(WEB_URL).optional(),
+  WEBHOOK_SECRET: z
+    .string()
+    .min(MIN_WEBHOOK_SECRET_LENGTH, { error: `must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters` })
+    .optional(),
   TRUST_PROXY: z.stringbool().default(false),
   DEMO_PAGE: z.stringbool().default(false),
+});
+
+const EnvSchema = EnvVariables.refine((env) => env.WEBHOOK_URL || !env.WEBHOOK_SECRET, {
+  error: 'is set, but WEBHOOK_URL is missing',
+  path: ['WEBHOOK_SECRET'],
 });
 
 type Env = z.infer<typeof EnvSchema>;
@@ -147,6 +164,7 @@ function toConfig(env: Env): Config {
     minFillMs: env.MIN_FILL_SECONDS * 1000,
     maxLinks: env.MAX_LINKS,
     successRedirect: env.SUCCESS_REDIRECT,
+    webhook: env.WEBHOOK_URL ? { url: env.WEBHOOK_URL, secret: env.WEBHOOK_SECRET } : undefined,
     trustProxy: env.TRUST_PROXY,
     demoPage: env.DEMO_PAGE,
   };

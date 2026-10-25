@@ -3,7 +3,7 @@ import { createApp } from '../src/app.ts';
 import type { Config } from '../src/config.ts';
 import { TEXTS } from '../src/i18n.ts';
 import { silentLogger } from '../src/log.ts';
-import { FakeNotifier, testConfig } from './helpers.ts';
+import { FakeDestination, testConfig } from './helpers.ts';
 
 const START = 1_000_000;
 const SITE = 'https://cafe.example';
@@ -15,11 +15,11 @@ interface PostOptions {
 }
 
 function setup(overrides: Partial<Config> = {}) {
-  const notifier = new FakeNotifier();
+  const destination = new FakeDestination();
   let time = START;
   const app = createApp({
     config: testConfig(overrides),
-    notifier,
+    destinations: [destination],
     clientIp: (c) => c.req.header('x-test-ip') ?? '10.0.0.1',
     logger: silentLogger,
     now: () => time,
@@ -37,25 +37,23 @@ function setup(overrides: Partial<Config> = {}) {
     return app.request('/lead', { method: 'POST', headers: requestHeaders, body: payload });
   };
 
-  return { app, notifier, post, advanceTime: (ms: number) => (time += ms) };
+  return { app, destination, post, advanceTime: (ms: number) => (time += ms) };
 }
 
 const widgetLead = (fields: Record<string, string> = {}) => ({ name: 'Олена', phone: '067 123 45 67', _t: String(START - 10_000), ...fields });
 
 describe('POST /lead', () => {
-  it('delivers a valid lead to Telegram', async () => {
-    const { post, notifier } = setup();
+  it('delivers a valid lead', async () => {
+    const { post, destination } = setup();
     const response = await post(widgetLead({ guests: '20–50' }));
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
-    expect(notifier.sent).toHaveLength(1);
-    expect(notifier.sent[0]).toContain('+380671234567');
-    expect(notifier.sent[0]).toContain('Guests: 20–50');
+    expect(destination.leads).toEqual([{ name: 'Олена', phone: '+380671234567', extra: [['guests', '20–50']], page: undefined }]);
   });
 
   it('returns field errors for invalid input', async () => {
-    const { post, notifier } = setup();
+    const { post, destination } = setup();
     const response = await post({ name: 'Олена', phone: 'nope' });
 
     expect(response.status).toBe(422);
@@ -65,17 +63,17 @@ describe('POST /lead', () => {
       message: TEXTS.uk.errors.invalidPhone,
       fields: { phone: TEXTS.uk.errors.invalidPhone },
     });
-    expect(notifier.sent).toHaveLength(0);
+    expect(destination.leads).toHaveLength(0);
   });
 
   it('pretends to accept spam but does not deliver it', async () => {
-    const { post, notifier } = setup();
+    const { post, destination } = setup();
     const honeypot = await post(widgetLead({ _gotcha: 'filled by a bot' }));
     const tooFast = await post(widgetLead({ _t: String(START - 500) }));
 
     expect(honeypot.status).toBe(200);
     expect(tooFast.status).toBe(200);
-    expect(notifier.sent).toHaveLength(0);
+    expect(destination.leads).toHaveLength(0);
   });
 
   it('rejects other origins but allows its own origin and requests without one', async () => {
@@ -101,43 +99,43 @@ describe('POST /lead', () => {
   });
 
   it('ignores a double submit of the same lead within a minute', async () => {
-    const { post, notifier, advanceTime } = setup();
+    const { post, destination, advanceTime } = setup();
     await post(widgetLead());
     advanceTime(2_000);
     expect((await post(widgetLead())).status).toBe(200);
-    expect(notifier.sent).toHaveLength(1);
+    expect(destination.leads).toHaveLength(1);
 
     advanceTime(61_000);
     await post(widgetLead());
-    expect(notifier.sent).toHaveLength(2);
+    expect(destination.leads).toHaveLength(2);
   });
 
   it('rate-limits per IP and says when to retry', async () => {
-    const { post, notifier } = setup({ rateLimit: { limit: 2, windowMs: 60_000 } });
+    const { post, destination } = setup({ rateLimit: { limit: 2, windowMs: 60_000 } });
     await post(widgetLead({ phone: '0501111111' }));
     await post(widgetLead({ phone: '0502222222' }));
     const blocked = await post(widgetLead({ phone: '0503333333' }));
 
     expect(blocked.status).toBe(429);
     expect(blocked.headers.get('retry-after')).toBe('60');
-    expect(notifier.sent).toHaveLength(2);
+    expect(destination.leads).toHaveLength(2);
     expect((await post(widgetLead({ phone: '0503333333' }), { headers: { 'x-test-ip': '10.0.0.2' } })).status).toBe(200);
   });
 
   it('reports delivery failures and lets the visitor retry', async () => {
-    const { post, notifier } = setup();
-    notifier.failWith = new Error('Telegram is down');
+    const { post, destination } = setup();
+    destination.failWith = new Error('Telegram is down');
     const failed = await post(widgetLead());
     expect(failed.status).toBe(502);
     expect((await failed.json()).message).toBe(TEXTS.uk.errors.deliveryFailed);
 
-    notifier.failWith = undefined;
+    destination.failWith = undefined;
     expect((await post(widgetLead())).status).toBe(200);
-    expect(notifier.sent).toHaveLength(1);
+    expect(destination.leads).toHaveLength(1);
   });
 
   it('works as a plain HTML form without JavaScript', async () => {
-    const { post, notifier } = setup();
+    const { post, destination } = setup();
     const body = 'name=%D0%9E%D0%BB%D0%B5%D0%BD%D0%B0&phone=0671234567&extras=Coffee&extras=Tea';
     const response = await post(body, { asForm: true, headers: { referer: `${SITE}/catering` } });
 
@@ -146,8 +144,7 @@ describe('POST /lead', () => {
     const html = await response.text();
     expect(html).toContain(TEXTS.uk.resultPage.thanksTitle);
     expect(html).toContain(`href="${SITE}/catering"`);
-    expect(notifier.sent[0]).toContain('Extras: Coffee, Tea');
-    expect(notifier.sent[0]).toContain(`${SITE}/catering`);
+    expect(destination.leads[0]).toMatchObject({ extra: [['extras', 'Coffee, Tea']], page: `${SITE}/catering` });
   });
 
   it('redirects plain form posts when SUCCESS_REDIRECT is set', async () => {
