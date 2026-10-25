@@ -33,10 +33,11 @@ Small businesses answer leads from their phone, not from an inbox. Email notific
 - **Works with any site**: plain HTML, Tilda/Webflow custom code, React, Vue. The form keeps working even if JavaScript fails (progressive enhancement)
 - **Readable messages**: Ukrainian or English, phone numbers normalized to `+380…` so they are tappable, source page and UTM tags included
 - **Spam protection without CAPTCHA**: a hidden honeypot field, a minimum fill time, a link limit, and per-IP rate limiting. Bots get a fake "success" so they learn nothing
-- **No lost leads**: if Telegram is down, the visitor sees an error and can retry; double submits are deduplicated
+- **No lost leads**: if every destination is down, the visitor sees an error and can retry; double submits are deduplicated
 - **Several recipients**: send to the owner, a managers' group, or a specific forum topic
+- **Webhook**: also forward every lead as signed JSON to Zapier, Make, n8n, your CRM or a Google Sheet
 - **Private by default**: lead data is never stored or logged. Logs are JSON lines with events only
-- **Small and tested**: Hono + Zod, 86 tests, strict TypeScript, Docker image
+- **Small and tested**: Hono + Zod, 131 tests, strict TypeScript, Docker image
 
 ## Quick start
 
@@ -142,7 +143,7 @@ async function submit(data: { name: string; phone: string }) {
 | `413` | `{ "ok": false, "error": "payload_too_large" }` | Body over 16 KB |
 | `422` | `{ "ok": false, "error": "validation", "message", "fields" }` | Invalid input; `fields` maps field → message |
 | `429` | `{ "ok": false, "error": "rate_limited" }` + `Retry-After` | Too many leads from one IP |
-| `502` | `{ "ok": false, "error": "delivery_failed" }` | Telegram did not accept the message |
+| `502` | `{ "ok": false, "error": "delivery_failed" }` | No destination accepted the lead |
 
 Requests without `Accept: application/json` (plain HTML forms) get a small localized result page instead, or a redirect to `SUCCESS_REDIRECT`.
 
@@ -165,8 +166,66 @@ All settings are environment variables; see [`.env.example`](.env.example). Inva
 | `MAX_LINKS` | `2` | More links in text fields is treated as spam |
 | `SUCCESS_REDIRECT` | | Thank-you page for no-JS submissions |
 | `TRUST_PROXY` | `false` | Read the visitor IP from `X-Forwarded-For` (enable behind a proxy) |
+| `WEBHOOK_URL` | | Also POST every lead as JSON to this URL ([details](#webhook)) |
+| `WEBHOOK_SECRET` | | At least 16 characters; signs each request with HMAC-SHA256 |
 | `TELEGRAM_API_URL` | `https://api.telegram.org` | For a self-hosted Bot API server |
 | `DEMO_PAGE` | `false` | Serve `examples/index.html` at `/demo` |
+
+## Webhook
+
+Set `WEBHOOK_URL` and every lead is also sent as JSON to that address, in parallel with Telegram. The visitor gets an answer as soon as one destination accepts the lead, so a slow webhook never delays the form.
+
+```json
+{
+  "id": "3f1c7e0a-5b2d-4f7e-9a51-0c8d2b6e4f19",
+  "event": "lead.created",
+  "receivedAt": "2026-10-24T17:48:00.000Z",
+  "lead": {
+    "name": "Олена",
+    "phone": "+380671234567",
+    "email": null,
+    "message": "Кава на 40 гостей",
+    "formName": "Кава на захід",
+    "page": "https://cafe.example/catering?utm_source=instagram",
+    "utm": { "source": "instagram" },
+    "fields": { "guests": "20–50", "extras": "Кава-бар, Випічка" }
+  }
+}
+```
+
+- Missing contact fields are `null`, so the shape is always the same, which is what Zapier and Make expect when you map fields.
+- Network errors, `429` and `5xx` are retried up to 3 times (honouring `Retry-After`). Every retry carries the same `id`, so the receiver can drop duplicates.
+- Any `2xx` counts as success; redirects are followed.
+
+### Verifying the signature
+
+With `WEBHOOK_SECRET` set, each request has an `X-Leadgram-Signature: sha256=<hex>` header: an HMAC-SHA256 of the raw body. Check it before trusting the data:
+
+```js
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+export function isFromLeadgram(rawBody, signature, secret) {
+  const expected = `sha256=${createHmac('sha256', secret).update(rawBody).digest('hex')}`;
+  return signature?.length === expected.length && timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+}
+```
+
+### Google Sheets
+
+1. Create a sheet, open **Extensions → Apps Script** and paste:
+
+   ```js
+   function doPost(event) {
+     const { receivedAt, lead } = JSON.parse(event.postData.contents);
+     const row = [receivedAt, lead.formName, lead.name, lead.phone, lead.email, lead.message, lead.page, lead.utm.source, JSON.stringify(lead.fields)];
+     SpreadsheetApp.getActiveSheet().appendRow(row.map((value) => (value == null ? '' : value)));
+     return ContentService.createTextOutput('ok');
+   }
+   ```
+
+2. **Deploy → New deployment → Web app**, execute as *Me*, access *Anyone*, and copy the URL into `WEBHOOK_URL`.
+
+Apps Script cannot read request headers, so it cannot check the signature. Treat the deployment URL as a secret instead.
 
 ## Deploy
 
@@ -184,8 +243,8 @@ docker run -d --name leadgram --env-file .env -p 3000:3000 --restart unless-stop
 ## How it works
 
 ```text
-form ──POST /lead──▶ origin check ─▶ parse body ─▶ spam check ─▶ validate ─▶ dedupe ─▶ rate limit ─▶ Telegram
-                       403            400/413      fake 200       422        fake 200     429       502 on failure
+form ──POST /lead──▶ origin check ─▶ parse body ─▶ spam check ─▶ validate ─▶ dedupe ─▶ rate limit ─▶ Telegram + webhook
+                       403            400/413      fake 200       422        fake 200     429       502 if all fail
 ```
 
 ```text
@@ -202,10 +261,17 @@ src/
     phone.ts             phone normalization (+380…)
     message.ts           Telegram HTML message
     fields.ts            service field names shared with the widget
+    source.ts            page URL and UTM tags
   protection/
     spam-filter.ts       honeypot, fill time, link counting
     rate-limiter.ts      sliding-window limit per IP
     duplicate-guard.ts   double-submit detection (hashes only)
+  delivery/
+    dispatcher.ts        sends to every destination, succeeds on the first that accepts
+    telegram-destination.ts
+    webhook-destination.ts  signed JSON with retries
+    destinations.ts      builds the list from the config
+    retry.ts             shared retry policy
   telegram.ts            Bot API client: retries, flood-control waits, multiple chats
   config.ts              env → typed config with Zod, readable startup errors
   server.ts              Node entry point, graceful shutdown
@@ -214,9 +280,9 @@ widget/
   leadgram.ts            browser widget, bundled by esbuild into dist/widget/leadgram.js
 ```
 
-Each module does one thing and has its own test file. The app receives everything it talks to (Telegram client, clock, IP lookup, logger) as parameters, so the whole pipeline is tested with `app.request()` and a fake notifier, without a network.
+Each module does one thing and has its own test file. The app receives everything it talks to (destinations, clock, IP lookup, logger) as parameters, so the whole pipeline is tested with `app.request()` and a fake destination, without a network. Adding a new destination means implementing one `deliver(lead, receivedAt)` method; the pipeline does not change.
 
-**Scaling note:** rate limits and duplicate detection live in memory, which is right for a single instance. Running several replicas would need a shared store such as Redis.
+**Scaling note:** rate limits and duplicate detection live in memory, which is right for a single instance. Running several replicas would need a shared store such as Redis. Deliveries still in flight when the server stops (a slow webhook during a redeploy, say) are not resumed after restart.
 
 ## Development
 
@@ -231,7 +297,6 @@ npm run build       # dist/ + dist/widget/leadgram.js
 
 - Optional Cloudflare Turnstile check for high-traffic sites
 - File attachments (photos for repair or design requests)
-- Google Sheets / webhook as a second destination
 
 ## License
 
