@@ -4,6 +4,7 @@ import type { Config } from '../src/config.ts';
 import { TEXTS } from '../src/i18n.ts';
 import { silentLogger } from '../src/log.ts';
 import { FakeDestination, testConfig } from './helpers.ts';
+import { fileWith, JPEG_HEADER, PDF_HEADER } from './support/files.ts';
 
 const START = 1_000_000;
 const SITE = 'https://cafe.example';
@@ -37,7 +38,10 @@ function setup(overrides: Partial<Config> = {}) {
     return app.request('/lead', { method: 'POST', headers: requestHeaders, body: payload });
   };
 
-  return { app, destination, post, advanceTime: (ms: number) => (time += ms) };
+  const postMultipart = (form: FormData) =>
+    app.request('/lead', { method: 'POST', headers: { origin: SITE, accept: 'application/json' }, body: form });
+
+  return { app, destination, post, postMultipart, advanceTime: (ms: number) => (time += ms) };
 }
 
 const widgetLead = (fields: Record<string, string> = {}) => ({ name: 'Олена', phone: '067 123 45 67', _t: String(START - 10_000), ...fields });
@@ -49,7 +53,7 @@ describe('POST /lead', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
-    expect(destination.leads).toEqual([{ name: 'Олена', phone: '+380671234567', extra: [['guests', '20–50']], page: undefined }]);
+    expect(destination.leads).toEqual([{ name: 'Олена', phone: '+380671234567', extra: [['guests', '20–50']], page: undefined, attachments: [] }]);
   });
 
   it('returns field errors for invalid input', async () => {
@@ -172,6 +176,59 @@ describe('POST /lead', () => {
   it('rejects unreadable and oversized bodies', async () => {
     const { post } = setup();
     expect((await post('{not json')).status).toBe(400);
+    expect((await post({ phone: '0671234567', message: 'x'.repeat(20_000) })).status).toBe(413);
+  });
+});
+
+describe('POST /lead with files', () => {
+  const uploadsOn = { attachments: { maxFiles: 2, maxFileBytes: 1024 * 1024 } };
+
+  function leadWithFiles(...files: File[]) {
+    const form = new FormData();
+    for (const [name, value] of Object.entries(widgetLead())) form.append(name, value);
+    for (const file of files) form.append('photos', file);
+    return form;
+  }
+
+  it('delivers the files with the lead', async () => {
+    const { postMultipart, destination } = setup(uploadsOn);
+    const response = await postMultipart(leadWithFiles(fileWith(JPEG_HEADER, 'hall.jpg', 500), fileWith(PDF_HEADER, 'menu.pdf', 300)));
+
+    expect(response.status).toBe(200);
+    expect(destination.leads[0]?.attachments.map(({ fileName, mimeType }) => [fileName, mimeType])).toEqual([
+      ['hall.jpg', 'image/jpeg'],
+      ['menu.pdf', 'application/pdf'],
+    ]);
+  });
+
+  it('accepts uploads bigger than the 16 KB text limit', async () => {
+    const { postMultipart, destination } = setup(uploadsOn);
+    expect((await postMultipart(leadWithFiles(fileWith(JPEG_HEADER, 'hall.jpg', 300 * 1024)))).status).toBe(200);
+    expect(destination.leads[0]?.attachments[0]?.content.size).toBe(300 * 1024);
+  });
+
+  it('rejects files when attachments are off', async () => {
+    const { postMultipart, destination } = setup();
+    const response = await postMultipart(leadWithFiles(fileWith(JPEG_HEADER, 'hall.jpg')));
+
+    expect(response.status).toBe(422);
+    expect((await response.json()).fields).toEqual({ photos: TEXTS.uk.attachmentErrors.notAccepted });
+    expect(destination.leads).toHaveLength(0);
+  });
+
+  it('accepts a multipart form without files when attachments are off', async () => {
+    const { postMultipart } = setup();
+    expect((await postMultipart(leadWithFiles())).status).toBe(200);
+  });
+
+  it('rejects uploads larger than the files allowed in total', async () => {
+    const { postMultipart } = setup(uploadsOn);
+    const response = await postMultipart(leadWithFiles(fileWith(JPEG_HEADER, 'a.jpg', 1024 * 1024), fileWith(JPEG_HEADER, 'b.jpg', 1024 * 1024 + 100 * 1024)));
+    expect(response.status).toBe(413);
+  });
+
+  it('keeps the small limit for JSON even when uploads are on', async () => {
+    const { post } = setup(uploadsOn);
     expect((await post({ phone: '0671234567', message: 'x'.repeat(20_000) })).status).toBe(413);
   });
 });

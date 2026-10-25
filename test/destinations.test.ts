@@ -3,7 +3,7 @@ import { createDestinations } from '../src/delivery/destinations.ts';
 import { silentLogger } from '../src/log.ts';
 import { testConfig } from './helpers.ts';
 
-const telegram = { send: async () => ({ delivered: 1, failed: [] }) };
+const telegram = { send: async () => ({ delivered: 1, problems: [] }) };
 const names = (config = testConfig()) => createDestinations(config, telegram, silentLogger).map(({ name }) => name);
 
 describe('createDestinations', () => {

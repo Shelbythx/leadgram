@@ -15,6 +15,7 @@ describe('renderLeadMessage', () => {
         extra: [['preferred_time', 'Вечір']],
         formName: 'Кава на захід',
         page: 'https://cafe.example/catering?utm_source=instagram&utm_campaign=autumn',
+        attachments: [],
       },
       context,
     );
@@ -38,13 +39,19 @@ describe('renderLeadMessage', () => {
   });
 
   it('skips empty sections', () => {
-    const text = renderLeadMessage({ email: 'a@b.co', extra: [] }, context);
+    const text = renderLeadMessage({ email: 'a@b.co', extra: [], attachments: [] }, context);
     expect(text).toBe(['🆕 <b>Нова заявка</b>', '', '✉️ Email: a@b.co', '', '🕒 Отримано: 09.10.26, 14:32'].join('\n'));
+  });
+
+  it('mentions how many files came with the lead', () => {
+    const photo = { fieldName: 'photos', fileName: 'hall.jpg', mimeType: 'image/jpeg', content: new Blob(['x']) };
+    const text = renderLeadMessage({ phone: '+380671234567', extra: [['guests', '20']], attachments: [photo, photo] }, context);
+    expect(text).toContain('▫️ Guests: 20\n📎 Файли: 2');
   });
 
   it('escapes HTML everywhere and ignores non-web page links', () => {
     const text = renderLeadMessage(
-      { name: '<b>x</b>', email: 'a@b.co', message: '1 < 2 & "q"', extra: [['<k>', '<v>']], page: 'javascript:alert(1)' },
+      { name: '<b>x</b>', email: 'a@b.co', message: '1 < 2 & "q"', extra: [['<k>', '<v>']], page: 'javascript:alert(1)', attachments: [] },
       context,
     );
     expect(text).not.toContain('<b>x</b>');

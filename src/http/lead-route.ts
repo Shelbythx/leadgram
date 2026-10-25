@@ -3,13 +3,13 @@ import type { Config } from '../config.ts';
 import type { Destination } from '../delivery/destination.ts';
 import { createDispatcher } from '../delivery/dispatcher.ts';
 import { TEXTS } from '../i18n.ts';
-import { createLeadSchema, parseLead } from '../lead/lead.ts';
+import { createLeadParser } from '../lead/lead.ts';
 import type { Logger } from '../log.ts';
 import { DuplicateGuard, fingerprint } from '../protection/duplicate-guard.ts';
 import { RateLimiter } from '../protection/rate-limiter.ts';
 import { detectSpam } from '../protection/spam-filter.ts';
 import type { OriginPolicy } from './origin-policy.ts';
-import { type ClientIpResolver, readFormFields } from './request.ts';
+import { type ClientIpResolver, readSubmission } from './request.ts';
 import type { Responder } from './responder.ts';
 
 export interface LeadRouteDeps {
@@ -25,7 +25,7 @@ export interface LeadRouteDeps {
 const DUPLICATE_WINDOW_MS = 60_000;
 
 export function createLeadHandler({ config, destinations, clientIp, origins, respond, log, now }: LeadRouteDeps) {
-  const schema = createLeadSchema(TEXTS[config.locale]);
+  const parseLead = createLeadParser(TEXTS[config.locale], config.attachments);
   const dispatch = createDispatcher(destinations, log);
   const rateLimiter = new RateLimiter(config.rateLimit);
   const duplicates = new DuplicateGuard(DUPLICATE_WINDOW_MS);
@@ -40,16 +40,16 @@ export function createLeadHandler({ config, destinations, clientIp, origins, res
       return respond.reject(c, 'forbidden_origin');
     }
 
-    const fields = await readFormFields(c.req);
-    if (!fields) return respond.reject(c, 'bad_request');
+    const submission = await readSubmission(c.req);
+    if (!submission) return respond.reject(c, 'bad_request');
 
-    const spamReason = detectSpam(fields, spamRules, now());
+    const spamReason = detectSpam(submission.fields, spamRules, now());
     if (spamReason) {
       log.info('lead.spam', { reason: spamReason, origin });
       return ignoreSilently(c);
     }
 
-    const parsed = parseLead(fields, schema);
+    const parsed = await parseLead(submission);
     if (!parsed.ok) return respond.invalid(c, parsed.errors);
 
     const lead = { ...parsed.lead, page: parsed.lead.page ?? c.req.header('referer') };

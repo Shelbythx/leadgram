@@ -15,6 +15,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     rateLimit: { limit: 3, windowMs: 60_000 },
     minFillMs: 3000,
     maxLinks: 2,
+    attachments: { maxFiles: 0, maxFileBytes: 10 * 1024 * 1024 },
     trustProxy: false,
     demoPage: false,
     ...overrides,

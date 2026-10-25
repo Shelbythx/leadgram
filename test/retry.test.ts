@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { type Attempt, DeliveryError, isRetryableStatus, retry, serverRequestedWaitMs } from '../src/delivery/retry.ts';
+import { type Attempt, DeliveryError, type Failure, isRetryableStatus, retry, serverRequestedWaitMs } from '../src/delivery/retry.ts';
 
-function scriptedAttempts(...results: Attempt[]) {
+function scriptedAttempts<T = void>(...results: Array<Attempt<T>>) {
   let calls = 0;
-  const attempt = async () => results[Math.min(calls++, results.length - 1)] as Attempt;
+  const attempt = async () => results[Math.min(calls++, results.length - 1)] as Attempt<T>;
   return { attempt, calls: () => calls };
 }
 
@@ -12,11 +12,16 @@ function recordingPolicy(maxAttempts = 3) {
   return { waits, policy: { maxAttempts, backoffMs: 100, sleep: async (ms: number) => void waits.push(ms) } };
 }
 
-const temporaryFailure: Attempt = { ok: false, retryable: true, reason: 'HTTP 503' };
+const temporaryFailure: Failure = { ok: false, retryable: true, reason: 'HTTP 503' };
 
 describe('retry', () => {
+  it('returns the value of the successful attempt', async () => {
+    const { attempt } = scriptedAttempts<number>(temporaryFailure, { ok: true, value: 42 });
+    expect(await retry(attempt, recordingPolicy().policy)).toBe(42);
+  });
+
   it('stops at the first success', async () => {
-    const { attempt, calls } = scriptedAttempts(temporaryFailure, { ok: true });
+    const { attempt, calls } = scriptedAttempts(temporaryFailure, { ok: true, value: undefined });
     const { waits, policy } = recordingPolicy();
 
     await retry(attempt, policy);
@@ -34,7 +39,7 @@ describe('retry', () => {
   });
 
   it('waits as long as the server asks', async () => {
-    const { attempt } = scriptedAttempts({ ...temporaryFailure, retryAfterMs: 2000 }, { ok: true });
+    const { attempt } = scriptedAttempts({ ...temporaryFailure, retryAfterMs: 2000 }, { ok: true, value: undefined });
     const { waits, policy } = recordingPolicy();
 
     await retry(attempt, policy);

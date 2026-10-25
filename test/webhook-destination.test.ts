@@ -27,6 +27,7 @@ const lead: Lead = {
   ],
   formName: 'Кава на захід',
   page: 'https://cafe.example/catering?utm_source=instagram&utm_campaign=autumn',
+  attachments: [],
 };
 const receivedAt = new Date('2026-10-24T17:48:00.000Z');
 const noWait = { sleep: async () => {} };
@@ -136,8 +137,16 @@ describe('toWebhookPayload', () => {
         page: 'https://cafe.example/catering?utm_source=instagram&utm_campaign=autumn',
         utm: { source: 'instagram', campaign: 'autumn' },
         fields: { guests: '20–50', extras: 'Кава-бар, Випічка' },
+        attachments: [],
       },
     });
+  });
+
+  it('describes attachments without their content', () => {
+    const photo = { fieldName: 'photos', fileName: 'hall.jpg', mimeType: 'image/jpeg', content: new Blob([new Uint8Array(2048)]) };
+    expect(toWebhookPayload('lead-1', { ...lead, attachments: [photo] }, receivedAt).lead.attachments).toEqual([
+      { name: 'hall.jpg', mimeType: 'image/jpeg', size: 2048 },
+    ]);
   });
 });
 

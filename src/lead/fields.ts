@@ -1,5 +1,15 @@
 export type FormFields = Record<string, string>;
 
+export interface UploadedFile {
+  fieldName: string;
+  file: File;
+}
+
+export interface Submission {
+  fields: FormFields;
+  files: UploadedFile[];
+}
+
 export const SERVICE_FIELD = {
   formName: '_form',
   page: '_page',

@@ -31,6 +31,8 @@
     .hint { font-weight: 400; color: var(--muted); }
     input, select, textarea { width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: transparent; color: inherit; font: inherit; }
     textarea { min-height: 96px; resize: vertical; }
+    input[type="file"] { padding: 10px 12px; font-size: 14px; }
+    input[type="file"]::file-selector-button { margin-right: 12px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
     input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
     [aria-invalid="true"] { border-color: var(--danger); }
     fieldset { border: 0; padding: 0; margin: 0 0 16px; }
@@ -51,7 +53,7 @@
     <h1>Кава на ваш захід</h1>
     <p class="lead">Залиште контакти, і бариста передзвонить протягом 15 хвилин, щоб узгодити меню.</p>
 
-    <form data-leadgram="/lead" action="/lead" method="post" novalidate>
+    <form data-leadgram="/lead" action="/lead" method="post" enctype="multipart/form-data" novalidate>
       <input type="hidden" name="_form" value="Кава на захід">
 
       <div class="field">
@@ -82,6 +84,11 @@
           <label><input type="checkbox" name="extras" value="Чай"> Чай</label>
         </div>
       </fieldset>
+
+      <div class="field">
+        <label for="photos">Фото залу <span class="hint">(необов’язково, до 3 файлів)</span></label>
+        <input id="photos" name="photos" type="file" accept="image/*,application/pdf" multiple>
+      </div>
 
       <div class="field">
         <label for="message">Коментар <span class="hint">(необов’язково)</span></label>

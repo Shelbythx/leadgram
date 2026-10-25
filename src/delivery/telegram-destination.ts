@@ -13,8 +13,8 @@ export function createTelegramDestination({ telegram, format, log }: TelegramDes
   return {
     name: 'telegram',
     async deliver(lead, receivedAt) {
-      const result = await telegram.send(renderLeadMessage(lead, { ...format, receivedAt }));
-      for (const reason of result.failed) log.warn('telegram.partial_failure', { reason });
+      const result = await telegram.send(renderLeadMessage(lead, { ...format, receivedAt }), lead.attachments);
+      for (const reason of result.problems) log.warn('telegram.partial_failure', { reason });
     },
   };
 }

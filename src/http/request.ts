@@ -1,10 +1,11 @@
 import type { Context, HonoRequest } from 'hono';
-import type { FormFields } from '../lead/fields.ts';
+import type { FormFields, Submission, UploadedFile } from '../lead/fields.ts';
 
 export type ClientIpResolver = (c: Context) => string;
 
 const JSON_TYPE = 'application/json';
-const FORM_TYPES = ['application/x-www-form-urlencoded', 'multipart/form-data'];
+const URL_ENCODED_TYPE = 'application/x-www-form-urlencoded';
+const MULTIPART_TYPE = 'multipart/form-data';
 const MAX_FIELDS = 50;
 const MAX_FIELD_NAME_LENGTH = 64;
 const UNKNOWN_IP = 'unknown';
@@ -13,11 +14,15 @@ export function prefersJson(req: HonoRequest): boolean {
   return [req.header('accept'), req.header('content-type')].some((value) => value?.includes(JSON_TYPE));
 }
 
-export async function readFormFields(req: HonoRequest): Promise<FormFields | undefined> {
+export function isMultipart(req: HonoRequest): boolean {
+  return (req.header('content-type') ?? '').includes(MULTIPART_TYPE);
+}
+
+export async function readSubmission(req: HonoRequest): Promise<Submission | undefined> {
   const contentType = req.header('content-type') ?? '';
   try {
-    if (contentType.includes(JSON_TYPE)) return fieldsFromJson(await req.json());
-    if (FORM_TYPES.some((type) => contentType.includes(type))) return toFormFields(Object.entries(await req.parseBody({ all: true })));
+    if (contentType.includes(JSON_TYPE)) return submissionFromJson(await req.json());
+    if (contentType.includes(URL_ENCODED_TYPE) || isMultipart(req)) return submissionFromForm(Object.entries(await req.parseBody({ all: true })));
     return undefined;
   } catch {
     return undefined;
@@ -33,8 +38,18 @@ function forwardedClientIp(req: HonoRequest): string | undefined {
   return firstForwarded || req.header('x-real-ip') || undefined;
 }
 
-function fieldsFromJson(body: unknown): FormFields | undefined {
-  return isPlainObject(body) ? toFormFields(Object.entries(body)) : undefined;
+function submissionFromJson(body: unknown): Submission | undefined {
+  return isPlainObject(body) ? { fields: toFormFields(Object.entries(body)), files: [] } : undefined;
+}
+
+function submissionFromForm(entries: Array<[string, unknown]>): Submission {
+  return { fields: toFormFields(entries), files: uploadedFiles(entries) };
+}
+
+function uploadedFiles(entries: Array<[string, unknown]>): UploadedFile[] {
+  return entries.flatMap(([fieldName, raw]) =>
+    (Array.isArray(raw) ? raw : [raw]).filter(isFile).map((file) => ({ fieldName, file })),
+  );
 }
 
 function toFormFields(entries: Array<[string, unknown]>): FormFields {
@@ -48,6 +63,10 @@ function toFormFields(entries: Array<[string, unknown]>): FormFields {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isFile(value: unknown): value is File {
+  return value instanceof File;
 }
 
 function isScalar(value: unknown): value is string | number | boolean {

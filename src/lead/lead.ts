@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import type { LocaleTexts } from '../i18n.ts';
-import { type FormFields, isServiceField, SERVICE_FIELD } from './fields.ts';
+import { type Attachment, type AttachmentRules, parseAttachments } from './attachments.ts';
+import { type FormFields, isServiceField, SERVICE_FIELD, type Submission } from './fields.ts';
 import { normalizePhone } from './phone.ts';
 
 export type ExtraField = [name: string, value: string];
@@ -13,11 +14,14 @@ export interface Lead {
   extra: ExtraField[];
   formName?: string | undefined;
   page?: string | undefined;
+  attachments: Attachment[];
 }
 
 export type FieldErrors = Record<string, string>;
 
 export type ParsedLead = { ok: true; lead: Lead } | { ok: false; errors: FieldErrors };
+
+export type LeadParser = (submission: Submission) => Promise<ParsedLead>;
 
 const MAX_LENGTH = {
   name: 100,
@@ -34,7 +38,7 @@ const CONTACT_FIELDS = new Set(['name', 'phone', 'email', 'message']);
 const FORM_LEVEL_ERROR_KEY = 'form';
 const EMAIL = z.email();
 
-export function createLeadSchema(texts: LocaleTexts) {
+function createLeadSchema(texts: LocaleTexts) {
   const optionalText = (maxLength: number) =>
     z
       .string()
@@ -60,20 +64,29 @@ export function createLeadSchema(texts: LocaleTexts) {
     .refine((lead) => lead.phone || lead.email, { error: texts.errors.contactRequired, path: ['phone'] });
 }
 
-export type LeadSchema = ReturnType<typeof createLeadSchema>;
+export function createLeadParser(texts: LocaleTexts, attachmentRules: AttachmentRules): LeadParser {
+  const schema = createLeadSchema(texts);
 
-export function parseLead(fields: FormFields, schema: LeadSchema): ParsedLead {
-  const result = schema.safeParse(fields);
-  if (!result.success) return { ok: false, errors: firstErrorPerField(result.error.issues) };
+  return async ({ fields, files }) => {
+    const details = schema.safeParse(fields);
+    const attachments = await parseAttachments(files, attachmentRules, texts.attachmentErrors);
 
-  return {
-    ok: true,
-    lead: {
-      ...result.data,
-      extra: extraFields(fields),
-      formName: optionalTrimmed(fields[SERVICE_FIELD.formName], MAX_LENGTH.formName),
-      page: optionalTrimmed(fields[SERVICE_FIELD.page]),
-    },
+    if (!details.success || !attachments.ok) {
+      const detailErrors = details.success ? {} : firstErrorPerField(details.error.issues);
+      const attachmentErrors = attachments.ok ? {} : attachments.errors;
+      return { ok: false, errors: { ...detailErrors, ...attachmentErrors } };
+    }
+
+    return {
+      ok: true,
+      lead: {
+        ...details.data,
+        extra: extraFields(fields),
+        formName: optionalTrimmed(fields[SERVICE_FIELD.formName], MAX_LENGTH.formName),
+        page: optionalTrimmed(fields[SERVICE_FIELD.page]),
+        attachments: attachments.attachments,
+      },
+    };
   };
 }
 

@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import type { Locale } from './i18n.ts';
+import { type AttachmentRules, bytesFromMegabytes } from './lead/attachments.ts';
 import type { RateLimit } from './protection/rate-limiter.ts';
 import type { ChatTarget } from './telegram.ts';
 
@@ -17,6 +18,7 @@ export interface Config {
   maxLinks: number;
   successRedirect?: string | undefined;
   webhook?: WebhookConfig | undefined;
+  attachments: AttachmentRules;
   trustProxy: boolean;
   demoPage: boolean;
 }
@@ -34,6 +36,8 @@ const CHAT_ID_FORMAT = /^-?\d+$|^@\w+$/;
 const BOT_TOKEN_FORMAT = /^\d+:[\w-]{30,}$/;
 const WEB_URL = { protocol: /^https?$/ };
 const MIN_WEBHOOK_SECRET_LENGTH = 16;
+const MAX_FILES_PER_LEAD = 10;
+const MAX_FILE_MEGABYTES = 20;
 
 export class ConfigError extends Error {
   override name = 'ConfigError';
@@ -122,6 +126,8 @@ const EnvVariables = z.object({
     .string()
     .min(MIN_WEBHOOK_SECRET_LENGTH, { error: `must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters` })
     .optional(),
+  MAX_FILES: z.coerce.number().int().min(0).max(MAX_FILES_PER_LEAD).default(0),
+  MAX_FILE_MB: z.coerce.number().positive().max(MAX_FILE_MEGABYTES).default(10),
   TRUST_PROXY: z.stringbool().default(false),
   DEMO_PAGE: z.stringbool().default(false),
 });
@@ -165,6 +171,7 @@ function toConfig(env: Env): Config {
     maxLinks: env.MAX_LINKS,
     successRedirect: env.SUCCESS_REDIRECT,
     webhook: env.WEBHOOK_URL ? { url: env.WEBHOOK_URL, secret: env.WEBHOOK_SECRET } : undefined,
+    attachments: { maxFiles: env.MAX_FILES, maxFileBytes: bytesFromMegabytes(env.MAX_FILE_MB) },
     trustProxy: env.TRUST_PROXY,
     demoPage: env.DEMO_PAGE,
   };
