@@ -25,10 +25,10 @@ beforeEach(() => {
   sleeps = [];
 });
 
-describe('telegram notifier', () => {
+describe('telegram send', () => {
   it('sends HTML to every chat, with topic ids', async () => {
     const api = scriptedTelegramApi();
-    const telegram = createTelegram({ token, chats: [{ chatId: '1' }, { chatId: '-100', topicId: 7 }], fetch: api.fetch, sleep });
+    const telegram = createTelegram({ token, chats: [{ chatId: '1' }, { chatId: '-100', topicId: 7 }], fetch: api.fetch, retryPolicy: { sleep } });
 
     expect(await telegram.send('<b>hi</b>')).toEqual({ delivered: 2, failed: [] });
     expect(api.calls[0]?.url).toBe('https://api.telegram.org/bot123:ABC/sendMessage');
@@ -38,7 +38,7 @@ describe('telegram notifier', () => {
 
   it('waits as long as Telegram asks on flood control, then retries', async () => {
     const api = scriptedTelegramApi({ '1': [{ status: 429, body: { ok: false, parameters: { retry_after: 3 } } }] });
-    await createTelegram({ token, chats: [{ chatId: '1' }], fetch: api.fetch, sleep }).send('x');
+    await createTelegram({ token, chats: [{ chatId: '1' }], fetch: api.fetch, retryPolicy: { sleep } }).send('x');
 
     expect(api.calls).toHaveLength(2);
     expect(sleeps).toEqual([3000]);
@@ -46,7 +46,7 @@ describe('telegram notifier', () => {
 
   it('retries network errors and 5xx with growing backoff', async () => {
     const api = scriptedTelegramApi({ '1': [new Error('ECONNRESET'), { status: 502, body: { ok: false } }] });
-    await createTelegram({ token, chats: [{ chatId: '1' }], fetch: api.fetch, sleep }).send('x');
+    await createTelegram({ token, chats: [{ chatId: '1' }], fetch: api.fetch, retryPolicy: { sleep } }).send('x');
 
     expect(api.calls).toHaveLength(3);
     expect(sleeps).toEqual([500, 1000]);
@@ -54,7 +54,7 @@ describe('telegram notifier', () => {
 
   it('does not retry client errors', async () => {
     const api = scriptedTelegramApi({ '1': [{ status: 403, body: { ok: false, description: 'Forbidden: bot was blocked by the user' } }] });
-    const telegram = createTelegram({ token, chats: [{ chatId: '1' }], fetch: api.fetch, sleep });
+    const telegram = createTelegram({ token, chats: [{ chatId: '1' }], fetch: api.fetch, retryPolicy: { sleep } });
 
     await expect(telegram.send('x')).rejects.toThrow(/bot was blocked/);
     expect(api.calls).toHaveLength(1);
@@ -62,19 +62,19 @@ describe('telegram notifier', () => {
 
   it('gives up after the last attempt', async () => {
     const api = scriptedTelegramApi({ '1': [new Error('down'), new Error('down'), new Error('down')] });
-    const telegram = createTelegram({ token, chats: [{ chatId: '1' }], fetch: api.fetch, sleep });
+    const telegram = createTelegram({ token, chats: [{ chatId: '1' }], fetch: api.fetch, retryPolicy: { sleep } });
     await expect(telegram.send('x')).rejects.toBeInstanceOf(TelegramError);
   });
 
   it('succeeds when at least one chat got the message', async () => {
     const api = scriptedTelegramApi({ '2': [{ status: 400, body: { ok: false, description: 'Bad Request: chat not found' } }] });
-    const telegram = createTelegram({ token, chats: [{ chatId: '1' }, { chatId: '2' }], fetch: api.fetch, sleep });
+    const telegram = createTelegram({ token, chats: [{ chatId: '1' }, { chatId: '2' }], fetch: api.fetch, retryPolicy: { sleep } });
     expect(await telegram.send('x')).toEqual({ delivered: 1, failed: ['chat 2: Bad Request: chat not found'] });
   });
 
   it('fails when no chat got the message', async () => {
     const api = scriptedTelegramApi({ '1': [{ status: 400, body: { ok: false, description: 'chat not found' } }] });
-    const telegram = createTelegram({ token, chats: [{ chatId: '1' }], fetch: api.fetch, sleep });
+    const telegram = createTelegram({ token, chats: [{ chatId: '1' }], fetch: api.fetch, retryPolicy: { sleep } });
     await expect(telegram.send('x')).rejects.toBeInstanceOf(TelegramError);
   });
 });

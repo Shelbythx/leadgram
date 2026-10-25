@@ -4,6 +4,7 @@ import { getConnInfo } from '@hono/node-server/conninfo';
 import type { Context } from 'hono';
 import { createApp } from './app.ts';
 import { ANY_ORIGIN, type Config, ConfigError, loadConfig } from './config.ts';
+import { createDestinations } from './delivery/destinations.ts';
 import { errorMessage, exitWithError } from './errors.ts';
 import { clientIpResolver } from './http/request.ts';
 import { createLogger } from './log.ts';
@@ -25,9 +26,10 @@ async function main(): Promise<void> {
   const demoHtml = config.demoPage ? await readOptionalFile(DEMO_FILE) : undefined;
   warnAboutSetup(config, widgetScript);
 
+  const destinations = createDestinations(config, telegram, log);
   const app = createApp({
     config,
-    notifier: telegram,
+    destinations,
     logger: log,
     clientIp: clientIpResolver(config.trustProxy, socketAddress),
     widgetScript,
@@ -39,6 +41,7 @@ async function main(): Promise<void> {
       url: `http://localhost:${port}`,
       bot: `@${bot}`,
       chats: config.chats.length,
+      destinations: destinations.map(({ name }) => name).join(', '),
       demo: demoHtml ? `http://localhost:${port}/demo` : undefined,
     });
   });

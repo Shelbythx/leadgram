@@ -50,3 +50,22 @@ describe('parseChats', () => {
     expect(parseChats('@my_channel,,42, -100:3')).toEqual([{ chatId: '@my_channel' }, { chatId: '42' }, { chatId: '-100', topicId: 3 }]);
   });
 });
+
+describe('webhook settings', () => {
+  it('are off by default', () => {
+    expect(loadConfig(requiredEnv).webhook).toBeUndefined();
+  });
+
+  it('read the URL and an optional secret', () => {
+    const config = loadConfig({ ...requiredEnv, WEBHOOK_URL: 'https://hooks.example.com/leads', WEBHOOK_SECRET: 'sixteen-chars-ok' });
+    expect(config.webhook).toEqual({ url: 'https://hooks.example.com/leads', secret: 'sixteen-chars-ok' });
+  });
+
+  it.each([
+    [{ WEBHOOK_URL: 'ftp://hooks.example.com' }, /WEBHOOK_URL/],
+    [{ WEBHOOK_URL: 'https://hooks.example.com', WEBHOOK_SECRET: 'short' }, /WEBHOOK_SECRET must be at least 16 characters/],
+    [{ WEBHOOK_SECRET: 'sixteen-chars-ok' }, /WEBHOOK_SECRET is set, but WEBHOOK_URL is missing/],
+  ])('reject %o', (webhookEnv, problem) => {
+    expect(() => loadConfig({ ...requiredEnv, ...webhookEnv })).toThrowError(problem);
+  });
+});

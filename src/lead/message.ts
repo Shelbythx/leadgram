@@ -1,15 +1,18 @@
 import { escapeHtml } from '../html.ts';
 import type { Locale, LocaleTexts } from '../i18n.ts';
 import type { ExtraField, Lead } from './lead.ts';
+import { parseWebUrl, utmParameters } from './source.ts';
 
-export interface MessageContext {
+export interface MessageFormat {
   texts: LocaleTexts;
   locale: Locale;
   timeZone: string;
+}
+
+export interface MessageContext extends MessageFormat {
   receivedAt: Date;
 }
 
-const UTM_PARAMETERS = ['source', 'medium', 'campaign', 'term', 'content'] as const;
 const MAX_PAGE_LABEL_LENGTH = 80;
 const MAX_UTM_VALUE_LENGTH = 60;
 const DATE_FORMAT_LOCALE: Record<Locale, string> = { uk: 'uk-UA', en: 'en-GB' };
@@ -70,19 +73,12 @@ function pageLabel(url: URL): string {
 }
 
 function utmSummary(url: URL): string {
-  return UTM_PARAMETERS.flatMap((name) => {
-    const value = url.searchParams.get(`utm_${name}`);
-    return value ? [`${name}=${escapeHtml(value.slice(0, MAX_UTM_VALUE_LENGTH))}`] : [];
-  }).join(' · ');
+  return Object.entries(utmParameters(url))
+    .map(([name, value]) => `${name}=${escapeHtml(value.slice(0, MAX_UTM_VALUE_LENGTH))}`)
+    .join(' · ');
 }
 
 function receivedLine({ texts, locale, timeZone, receivedAt }: MessageContext): string {
   const time = new Intl.DateTimeFormat(DATE_FORMAT_LOCALE[locale], { timeZone, dateStyle: 'short', timeStyle: 'short' }).format(receivedAt);
   return `🕒 ${texts.received}: ${time}`;
-}
-
-function parseWebUrl(value: string | undefined): URL | undefined {
-  if (!value || !URL.canParse(value)) return undefined;
-  const url = new URL(value);
-  return url.protocol === 'http:' || url.protocol === 'https:' ? url : undefined;
 }

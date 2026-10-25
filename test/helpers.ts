@@ -1,5 +1,6 @@
 import type { Config } from '../src/config.ts';
-import type { DeliveryResult, Notifier } from '../src/telegram.ts';
+import type { Destination } from '../src/delivery/destination.ts';
+import type { Lead } from '../src/lead/lead.ts';
 
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
@@ -20,13 +21,17 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
   };
 }
 
-export class FakeNotifier implements Notifier {
-  sent: string[] = [];
+export class FakeDestination implements Destination {
+  readonly name: string;
+  readonly leads: Lead[] = [];
   failWith: Error | undefined;
 
-  async send(html: string): Promise<DeliveryResult> {
+  constructor(name = 'fake') {
+    this.name = name;
+  }
+
+  async deliver(lead: Lead): Promise<void> {
     if (this.failWith) throw this.failWith;
-    this.sent.push(html);
-    return { delivered: 1, failed: [] };
+    this.leads.push(lead);
   }
 }

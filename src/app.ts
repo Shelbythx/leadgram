@@ -2,17 +2,17 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import type { Config } from './config.ts';
+import type { Destination } from './delivery/destination.ts';
 import { createLeadHandler } from './http/lead-route.ts';
 import { createOriginPolicy } from './http/origin-policy.ts';
 import type { ClientIpResolver } from './http/request.ts';
 import { createResponder } from './http/responder.ts';
 import { TEXTS } from './i18n.ts';
 import { createLogger, type Logger } from './log.ts';
-import type { Notifier } from './telegram.ts';
 
 export interface AppDeps {
   config: Config;
-  notifier: Notifier;
+  destinations: readonly Destination[];
   clientIp: ClientIpResolver;
   logger?: Logger;
   now?: () => number;
@@ -24,7 +24,7 @@ const MAX_BODY_BYTES = 16 * 1024;
 const PREFLIGHT_CACHE_SECONDS = 86_400;
 const WIDGET_CACHE_SECONDS = 3_600;
 
-export function createApp({ config, notifier, clientIp, logger, now = Date.now, widgetScript, demoHtml }: AppDeps): Hono {
+export function createApp({ config, destinations, clientIp, logger, now = Date.now, widgetScript, demoHtml }: AppDeps): Hono {
   const log = logger ?? createLogger();
   const origins = createOriginPolicy(config.allowedOrigins);
   const respond = createResponder({
@@ -48,7 +48,7 @@ export function createApp({ config, notifier, clientIp, logger, now = Date.now, 
   app.post(
     '/lead',
     bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => respond.reject(c, 'payload_too_large') }),
-    createLeadHandler({ config, notifier, clientIp, origins, respond, log, now }),
+    createLeadHandler({ config, destinations, clientIp, origins, respond, log, now }),
   );
 
   app.get('/health', (c) => c.json({ ok: true }));
