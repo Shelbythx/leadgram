@@ -21,7 +21,7 @@ export function renderLeadMessage(lead: Lead, context: MessageContext): string {
   const sections = [
     [titleLine(lead.formName, context.texts)],
     contactLines(lead, context.texts),
-    extraFieldLines(lead.extra),
+    [...extraFieldLines(lead.extra), ...fileCountLines(lead.attachments.length, context.texts)],
     [...sourceLines(lead.page, context.texts), receivedLine(context)],
   ];
   return sections
@@ -55,6 +55,10 @@ function contactLines(lead: Lead, texts: LocaleTexts): string[] {
 
 function extraFieldLines(extra: ExtraField[]): string[] {
   return extra.map(([name, value]) => `▫️ ${escapeHtml(humanizeFieldName(name))}: ${escapeHtml(value)}`);
+}
+
+function fileCountLines(count: number, texts: LocaleTexts): string[] {
+  return count > 0 ? [`📎 ${texts.files}: ${count}`] : [];
 }
 
 function sourceLines(page: string | undefined, texts: LocaleTexts): string[] {

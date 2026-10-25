@@ -18,6 +18,7 @@ export interface WebhookPayload {
     page: string | null;
     utm: UtmParameters;
     fields: Record<string, string>;
+    attachments: Array<{ name: string; mimeType: string; size: number }>;
   };
 }
 
@@ -43,7 +44,7 @@ export function createWebhookDestination(options: WebhookOptions): Destination {
     try {
       const response = await fetchImpl(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
       await response.body?.cancel();
-      if (response.ok) return { ok: true };
+      if (response.ok) return { ok: true, value: undefined };
       return {
         ok: false,
         retryable: isRetryableStatus(response.status),
@@ -83,6 +84,7 @@ export function toWebhookPayload(id: string, lead: Lead, receivedAt: Date): Webh
       page: lead.page ?? null,
       utm: utmParameters(parseWebUrl(lead.page)),
       fields: Object.fromEntries(lead.extra),
+      attachments: lead.attachments.map(({ fileName, mimeType, content }) => ({ name: fileName, mimeType, size: content.size })),
     },
   };
 }

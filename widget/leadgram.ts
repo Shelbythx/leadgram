@@ -46,6 +46,8 @@ const DEFAULT_TEXTS: Record<'uk' | 'en', StatusTexts> = {
 const FORM_SELECTOR = 'form[data-leadgram]';
 const STATUS_ATTRIBUTE = 'data-leadgram-status';
 const SUBMIT_BUTTON_SELECTOR = '[type="submit"], button:not([type])';
+const FILE_INPUT_SELECTOR = 'input[type="file"]';
+const JSON_TYPE = 'application/json';
 const OFFSCREEN_STYLE = 'position:absolute!important;left:-10000px!important;width:1px;height:1px;overflow:hidden';
 
 export function enhance(form: HTMLFormElement, options: EnhanceOptions = {}): void {
@@ -73,7 +75,7 @@ async function submit(leadForm: LeadForm, button: HTMLButtonElement | HTMLInputE
   if (button) button.disabled = true;
 
   try {
-    const { accepted, reply } = await postLead(leadForm.endpoint, collectTextFields(leadForm.form));
+    const { accepted, reply } = await postLead(leadForm.endpoint, leadForm.form);
     if (accepted) showSuccess(leadForm, reply);
     else showRejection(leadForm, reply);
   } catch {
@@ -84,12 +86,8 @@ async function submit(leadForm: LeadForm, button: HTMLButtonElement | HTMLInputE
   }
 }
 
-async function postLead(endpoint: string, fields: Record<string, string>): Promise<{ accepted: boolean; reply: ServerReply }> {
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify(fields),
-  });
+async function postLead(endpoint: string, form: HTMLFormElement): Promise<{ accepted: boolean; reply: ServerReply }> {
+  const response = await fetch(endpoint, { method: 'POST', ...requestBody(form) });
   const reply = (await response.json().catch(() => ({}))) as ServerReply;
   return { accepted: response.ok && reply.ok === true, reply };
 }
@@ -126,6 +124,15 @@ function markInvalid(form: HTMLFormElement, names: string[]): void {
 
 function clearInvalidMarks(form: HTMLFormElement): void {
   form.querySelectorAll('[aria-invalid]').forEach((field) => field.removeAttribute('aria-invalid'));
+}
+
+function requestBody(form: HTMLFormElement): RequestInit {
+  if (hasSelectedFiles(form)) return { headers: { Accept: JSON_TYPE }, body: new FormData(form) };
+  return { headers: { 'Content-Type': JSON_TYPE, Accept: JSON_TYPE }, body: JSON.stringify(collectTextFields(form)) };
+}
+
+function hasSelectedFiles(form: HTMLFormElement): boolean {
+  return [...form.querySelectorAll<HTMLInputElement>(FILE_INPUT_SELECTOR)].some((input) => (input.files?.length ?? 0) > 0);
 }
 
 function collectTextFields(form: HTMLFormElement): Record<string, string> {

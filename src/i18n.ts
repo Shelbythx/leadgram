@@ -7,6 +7,7 @@ export interface LocaleTexts {
   email: string;
   message: string;
   page: string;
+  files: string;
   received: string;
   errors: {
     contactRequired: string;
@@ -18,6 +19,12 @@ export interface LocaleTexts {
     payloadTooLarge: string;
     rateLimited: string;
     deliveryFailed: string;
+  };
+  attachmentErrors: {
+    notAccepted: string;
+    tooMany: (maxFiles: number) => string;
+    tooLarge: (maxMegabytes: number) => string;
+    unsupportedType: string;
   };
   resultPage: {
     thanksTitle: string;
@@ -35,6 +42,7 @@ export const TEXTS: Record<Locale, LocaleTexts> = {
     email: 'Email',
     message: 'Повідомлення',
     page: 'Сторінка',
+    files: 'Файли',
     received: 'Отримано',
     errors: {
       contactRequired: 'Вкажіть телефон або email, щоб ми могли з вами зв’язатися',
@@ -46,6 +54,12 @@ export const TEXTS: Record<Locale, LocaleTexts> = {
       payloadTooLarge: 'Забагато даних у формі',
       rateLimited: 'Забагато заявок поспіль. Спробуйте ще раз за кілька хвилин.',
       deliveryFailed: 'Не вдалося надіслати заявку. Спробуйте ще раз або зателефонуйте нам.',
+    },
+    attachmentErrors: {
+      notAccepted: 'Ця форма не приймає файли',
+      tooMany: (maxFiles) => (maxFiles === 1 ? 'Можна додати лише 1 файл' : `Можна додати до ${maxFiles} файлів`),
+      tooLarge: (maxMegabytes) => `Кожен файл має бути до ${maxMegabytes} МБ`,
+      unsupportedType: 'Підходять фото (JPG, PNG, WebP, HEIC) або PDF',
     },
     resultPage: {
       thanksTitle: 'Дякуємо!',
@@ -61,6 +75,7 @@ export const TEXTS: Record<Locale, LocaleTexts> = {
     email: 'Email',
     message: 'Message',
     page: 'Page',
+    files: 'Files',
     received: 'Received',
     errors: {
       contactRequired: 'Leave a phone number or an email so we can get back to you',
@@ -72,6 +87,12 @@ export const TEXTS: Record<Locale, LocaleTexts> = {
       payloadTooLarge: 'The form contains too much data',
       rateLimited: 'Too many requests in a row. Please try again in a few minutes.',
       deliveryFailed: 'We could not send your request. Please try again or give us a call.',
+    },
+    attachmentErrors: {
+      notAccepted: 'This form does not accept files',
+      tooMany: (maxFiles) => (maxFiles === 1 ? 'You can attach only 1 file' : `You can attach up to ${maxFiles} files`),
+      tooLarge: (maxMegabytes) => `Each file must be ${maxMegabytes} MB or smaller`,
+      unsupportedType: 'Please attach photos (JPG, PNG, WebP, HEIC) or PDF',
     },
     resultPage: {
       thanksTitle: 'Thank you!',

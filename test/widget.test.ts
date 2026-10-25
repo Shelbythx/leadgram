@@ -22,6 +22,14 @@ const statusText = (form: HTMLFormElement) => form.querySelector('[data-leadgram
 const fieldValue = (form: HTMLFormElement, name: string) => (form.elements.namedItem(name) as HTMLInputElement).value;
 const jsonReply = (status: number, body: object) => Response.json(body, { status });
 
+function addFileInput(form: HTMLFormElement, files: File[] = []) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.name = 'photos';
+  Object.defineProperty(input, 'files', { value: files });
+  form.append(input);
+}
+
 function stubFetch(reply: () => Promise<Response>) {
   const fetch = vi.fn(reply);
   vi.stubGlobal('fetch', fetch);
@@ -102,6 +110,29 @@ describe('widget', () => {
     const form = renderForm('data-success-message="Чекайте дзвінка"');
     submit(form);
     await vi.waitFor(() => expect(statusText(form)).toBe('Чекайте дзвінка'));
+  });
+
+  it('sends multipart form data when a file is selected', async () => {
+    const fetch = stubFetch(async () => jsonReply(200, { ok: true }));
+    const form = renderForm();
+    addFileInput(form, [new File(['x'], 'hall.jpg', { type: 'image/jpeg' })]);
+
+    submit(form);
+    await vi.waitFor(() => expect(form.dataset.leadgramState).toBe('success'));
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.body).toBeInstanceOf(FormData);
+    expect(init.headers).toEqual({ Accept: 'application/json' });
+  });
+
+  it('keeps sending JSON when file inputs are empty', async () => {
+    const fetch = stubFetch(async () => jsonReply(200, { ok: true }));
+    const form = renderForm();
+    addFileInput(form);
+
+    submit(form);
+    await vi.waitFor(() => expect(form.dataset.leadgramState).toBe('success'));
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(typeof init.body).toBe('string');
   });
 
   it('explains network failures', async () => {

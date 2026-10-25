@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
-import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import type { Config } from './config.ts';
 import type { Destination } from './delivery/destination.ts';
+import { limitBodySize } from './http/body-limit.ts';
 import { createLeadHandler } from './http/lead-route.ts';
 import { createOriginPolicy } from './http/origin-policy.ts';
 import type { ClientIpResolver } from './http/request.ts';
@@ -20,7 +20,6 @@ export interface AppDeps {
   demoHtml?: string | undefined;
 }
 
-const MAX_BODY_BYTES = 16 * 1024;
 const PREFLIGHT_CACHE_SECONDS = 86_400;
 const WIDGET_CACHE_SECONDS = 3_600;
 
@@ -47,7 +46,7 @@ export function createApp({ config, destinations, clientIp, logger, now = Date.n
   );
   app.post(
     '/lead',
-    bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => respond.reject(c, 'payload_too_large') }),
+    limitBodySize(config.attachments, (c) => respond.reject(c, 'payload_too_large')),
     createLeadHandler({ config, destinations, clientIp, origins, respond, log, now }),
   );
 

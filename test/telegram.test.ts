@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createTelegram, TelegramError } from '../src/telegram.ts';
+import { createTelegram, TelegramError, type UploadFile } from '../src/telegram.ts';
 
 type ScriptedReply = { status: number; body: object } | Error;
 
@@ -30,7 +30,7 @@ describe('telegram send', () => {
     const api = scriptedTelegramApi();
     const telegram = createTelegram({ token, chats: [{ chatId: '1' }, { chatId: '-100', topicId: 7 }], fetch: api.fetch, retryPolicy: { sleep } });
 
-    expect(await telegram.send('<b>hi</b>')).toEqual({ delivered: 2, failed: [] });
+    expect(await telegram.send('<b>hi</b>')).toEqual({ delivered: 2, problems: [] });
     expect(api.calls[0]?.url).toBe('https://api.telegram.org/bot123:ABC/sendMessage');
     expect(api.calls[0]?.payload).not.toHaveProperty('message_thread_id');
     expect(api.calls[1]?.payload).toMatchObject({ chat_id: '-100', message_thread_id: 7, text: '<b>hi</b>', parse_mode: 'HTML' });
@@ -69,7 +69,7 @@ describe('telegram send', () => {
   it('succeeds when at least one chat got the message', async () => {
     const api = scriptedTelegramApi({ '2': [{ status: 400, body: { ok: false, description: 'Bad Request: chat not found' } }] });
     const telegram = createTelegram({ token, chats: [{ chatId: '1' }, { chatId: '2' }], fetch: api.fetch, retryPolicy: { sleep } });
-    expect(await telegram.send('x')).toEqual({ delivered: 1, failed: ['chat 2: Bad Request: chat not found'] });
+    expect(await telegram.send('x')).toEqual({ delivered: 1, problems: ['chat 2: Bad Request: chat not found'] });
   });
 
   it('fails when no chat got the message', async () => {
@@ -98,5 +98,79 @@ describe('telegram bot info', () => {
     const telegram = createTelegram({ token, chats: [], fetch: replyWith({ ok: true, result: updates }) });
 
     expect((await telegram.recentChats()).map((c) => c.id)).toEqual([1, -100]);
+  });
+});
+
+describe('telegram files', () => {
+  interface RecordedCall {
+    method: string;
+    json?: Record<string, unknown>;
+    form?: FormData;
+  }
+
+  function recordingTelegramApi({ rejectUploads = false } = {}) {
+    const calls: RecordedCall[] = [];
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      const method = String(input).split('/').pop() ?? '';
+      if (init?.body instanceof FormData) {
+        calls.push({ method, form: init.body });
+        return rejectUploads ? Response.json({ ok: false, description: 'Bad Request: wrong file' }, { status: 400 }) : Response.json({ ok: true, result: [] });
+      }
+      calls.push({ method, json: JSON.parse(String(init?.body)) });
+      return Response.json({ ok: true, result: { message_id: 55 } });
+    };
+    return { calls, fetch };
+  }
+
+  const file = (fileName: string, mimeType: string, size = 10): UploadFile => ({ fileName, mimeType, content: new Blob([new Uint8Array(size)]) });
+  const uploadedNames = (form: FormData | undefined) =>
+    [...(form?.entries() ?? [])].flatMap(([name, value]) => (value instanceof File ? [`${name}=${value.name}`] : []));
+
+  it('sends files as a reply to the lead message, inside the same topic', async () => {
+    const api = recordingTelegramApi();
+    const telegram = createTelegram({ token, chats: [{ chatId: '-100', topicId: 7 }], fetch: api.fetch, retryPolicy: { sleep } });
+
+    await telegram.send('lead', [file('hall.jpg', 'image/jpeg'), file('stage.png', 'image/png'), file('menu.pdf', 'application/pdf')]);
+
+    expect(api.calls.map(({ method }) => method)).toEqual(['sendMessage', 'sendMediaGroup', 'sendDocument']);
+    const album = api.calls[1]?.form;
+    expect(album?.get('chat_id')).toBe('-100');
+    expect(album?.get('message_thread_id')).toBe('7');
+    expect(JSON.parse(String(album?.get('reply_parameters')))).toEqual({ message_id: 55, allow_sending_without_reply: true });
+    expect(JSON.parse(String(album?.get('media')))).toEqual([
+      { type: 'photo', media: 'attach://file0' },
+      { type: 'photo', media: 'attach://file1' },
+    ]);
+    expect(uploadedNames(album)).toEqual(['file0=hall.jpg', 'file1=stage.png']);
+    expect(uploadedNames(api.calls[2]?.form)).toEqual(['document=menu.pdf']);
+  });
+
+  it('sends HEIC and photos over 10 MB as documents', async () => {
+    const api = recordingTelegramApi();
+    const telegram = createTelegram({ token, chats: [{ chatId: '1' }], fetch: api.fetch, retryPolicy: { sleep } });
+
+    await telegram.send('lead', [file('IMG_1.heic', 'image/heic'), file('huge.jpg', 'image/jpeg', 10 * 1024 * 1024 + 1)]);
+
+    expect(api.calls.map(({ method }) => method)).toEqual(['sendMessage', 'sendMediaGroup']);
+    expect(JSON.parse(String(api.calls[1]?.form?.get('media')))).toEqual([
+      { type: 'document', media: 'attach://file0' },
+      { type: 'document', media: 'attach://file1' },
+    ]);
+  });
+
+  it('splits more than ten photos into several messages', async () => {
+    const api = recordingTelegramApi();
+    const photos = Array.from({ length: 11 }, (_, index) => file(`${index}.jpg`, 'image/jpeg'));
+    await createTelegram({ token, chats: [{ chatId: '1' }], fetch: api.fetch, retryPolicy: { sleep } }).send('lead', photos);
+
+    expect(api.calls.map(({ method }) => method)).toEqual(['sendMessage', 'sendMediaGroup', 'sendPhoto']);
+    expect(uploadedNames(api.calls[2]?.form)).toEqual(['photo=10.jpg']);
+  });
+
+  it('keeps the lead delivered when files fail and reports the problem', async () => {
+    const api = recordingTelegramApi({ rejectUploads: true });
+    const telegram = createTelegram({ token, chats: [{ chatId: '1' }], fetch: api.fetch, retryPolicy: { sleep } });
+
+    expect(await telegram.send('lead', [file('a.jpg', 'image/jpeg')])).toEqual({ delivered: 1, problems: ['chat 1: files: Bad Request: wrong file'] });
   });
 });

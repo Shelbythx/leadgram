@@ -1,4 +1,6 @@
-export type Attempt = { ok: true } | { ok: false; retryable: boolean; reason: string; retryAfterMs?: number | undefined };
+export type Failure = { ok: false; retryable: boolean; reason: string; retryAfterMs?: number | undefined };
+
+export type Attempt<T = void> = { ok: true; value: T } | Failure;
 
 export interface RetryPolicy {
   maxAttempts: number;
@@ -19,10 +21,10 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 export const DEFAULT_RETRY_POLICY: RetryPolicy = { maxAttempts: 3, backoffMs: 500, sleep: delay };
 
-export async function retry(attempt: () => Promise<Attempt>, policy: RetryPolicy): Promise<void> {
+export async function retry<T>(attempt: () => Promise<Attempt<T>>, policy: RetryPolicy): Promise<T> {
   for (let attemptNumber = 1; ; attemptNumber++) {
     const result = await attempt();
-    if (result.ok) return;
+    if (result.ok) return result.value;
     if (!result.retryable || attemptNumber >= policy.maxAttempts) throw new DeliveryError(result.reason);
     await policy.sleep(result.retryAfterMs ?? policy.backoffMs * attemptNumber);
   }

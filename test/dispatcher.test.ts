@@ -4,7 +4,7 @@ import { createDispatcher } from '../src/delivery/dispatcher.ts';
 import type { LogFields } from '../src/log.ts';
 import { FakeDestination } from './helpers.ts';
 
-const lead = { phone: '+380671234567', extra: [], formName: 'Callback' };
+const lead = { phone: '+380671234567', extra: [], formName: 'Callback', attachments: [] };
 const receivedAt = new Date('2026-10-24T12:00:00Z');
 
 function recordingLogger() {
